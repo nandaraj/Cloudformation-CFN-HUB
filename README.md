@@ -1,5 +1,5 @@
 # Cloudformation-CFN-HUB
-Update the host file in any EC2 instances started by an AutoScaling Group
+Cloudformation template to update the host file in any EC2 instances started by an AutoScaling Group
 
 We can define several files that contain hooks monitoring several resources. Let’s examine the hook defined in /etc/cfn/hooks.d/cfn-auto-reloader.conf.
 
