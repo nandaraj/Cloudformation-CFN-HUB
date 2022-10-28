@@ -1,0 +1,82 @@
+Example: Update the host file in any EC2 instances started by an AutoScaling Group
+
+Resources:
+  EcsInstanceLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      IamInstanceProfile: ecsInstanceRole
+      ImageId: !FindInMap [EcsOptimizedAmi, !Ref "AWS::Region", AmiId]
+      InstanceType: !Ref EcsInstanceType
+      KeyName: !Ref KeyName
+      UserData:
+        Fn::Base64:
+          !Sub |
+            yum update -y
+            yum install -y aws-cfn-bootstrap
+            # Install the files and packages from the metadata.
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --region ${AWS::Region} --resource EcsInstanceLaunchConfiguration --configsets SetupEnvironment,UpdateEnvironment
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          SetupEnvironment:
+            - setupCfnHup
+            - installAwsCli
+          UpdateEnvironment:
+            - updateHostsFile
+        setupCfnHup:
+           files:
+             '/etc/cfn/cfn-hup.conf':
+               content: !Sub |
+                 [main]
+                 stack=${AWS::StackId}
+                 region=${AWS::Region}
+                 interval=1
+               mode: '000400'
+               owner: root
+               group: root
+             '/etc/cfn/hooks.d/cfn-auto-reloader.conf':
+               content: !Sub |
+                 [cfn-auto-reloader-hook]
+                 triggers=post.update
+                 path=Resources.EcsInstanceLaunchConfiguration.Metadata.AWS::CloudFormation::Init
+                 action=/opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=EcsInstanceLaunchConfiguration --configsets UpdateEnvironment
+                 runas=root
+               mode: '000400'
+               owner: root
+               group: root
+           services:
+             sysvinit:
+               cfn-hup:
+                 enabled: true
+                 ensureRunning: true
+                 files:
+                 - '/etc/cfn/cfn-hup.conf'
+                 - '/etc/cfn/hooks.d/cfn-auto-reloader.conf'
+        installAwsCli:
+          packages:
+            yum:
+              unzip: []
+          commands:
+            01_download_bundled_installer:
+              command: curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+            02_unzip_package:
+              command: unzip awscli-bundle.zip
+            03_run_install_executable:
+              command: sudo ./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+        updateHostsFile:
+          commands:
+            01_remove_local_graylog_entries:
+              command: sed -i '/local.graylog/d' /etc/hosts
+            02_add_graylog_entry:
+              command: echo "$(/usr/local/bin/aws ec2 describe-instances --region us-east-1 --filters "Name=tag:aws:cloudformation:stack-name,Values=${GRAYLOG_CLUSTER_STACK_NAME}" --query 'Reservations[*].Instances[*].NetworkInterfaces[*].PrivateIpAddresses[*].PrivateIpAddress' --output text) local.graylog" >> /etc/hosts
+              env:
+                GRAYLOG_CLUSTER_STACK_NAME: "GraylogCluster"
+
+
+We can define several files that contain hooks monitoring several resources. Let’s examine the hook defined in /etc/cfn/hooks.d/cfn-auto-reloader.conf.
+
+This hook monitors  Resources.EcsInstanceLaunchConfiguration.Metadata.AWS::CloudFormation::Init,  
+
+so any changes to the metadata of this launch configuration. When anything changes, it executes the command /opt/aws/bin/cfn-init --verbose --stack=${AWS::StackName} --region=${AWS::Region} --resource=EcsInstanceLaunchConfiguration --configsets UpdateEnvironment
+
+Which updates the host file with the private IP address of the Graylog instance.
